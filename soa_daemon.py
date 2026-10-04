@@ -4,11 +4,11 @@
 Attaches to Steam's CEF remote debugging port, injects agent.js into the
 context that owns the in-game overlay (and into overlay web pages), and speaks
 whatever the agent reports: through speech-dispatcher on Linux, through NVDA or
-SAPI 5 on Windows.
+SAPI 5 on Windows, through the system voice on macOS.
 
 Steam must run with CEF debugging enabled: create the empty file
-.cef-enable-remote-debugging in Steam's directory (install.sh / install.ps1 do
-it) and restart Steam.
+.cef-enable-remote-debugging in Steam's directory (the installers do it) and
+restart Steam.
 """
 import argparse
 import asyncio
@@ -23,6 +23,7 @@ import websockets
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WINDOWS = sys.platform == 'win32'
+MAC = sys.platform == 'darwin'
 if WINDOWS:
     CONFIG_HOME = os.environ.get('APPDATA') or os.path.expanduser('~')
 else:
@@ -35,7 +36,7 @@ DEFAULTS = {
     'toasts': True,     # speak in-game notification toasts
     'chat': True,       # speak chat messages arriving while the overlay is open
     'rate': None,       # speech rate -100..100; None = user default
-    'voice': None,      # synthesis voice name (Windows: any part of a SAPI voice name)
+    'voice': None,      # synthesis voice name (Windows, macOS: any part of a voice name)
     'module': None,     # speech-dispatcher output module (Linux only)
     'language': None,   # voice language, e.g. 'en' when Steam's UI is English
     'screenreader': True,  # Windows: speak through NVDA when it is running
@@ -174,7 +175,53 @@ class WindowsSpeaker:
             self._sapi({'t': 'stop'})
 
 
-Speaker = WindowsSpeaker if WINDOWS else SpeechdSpeaker
+class MacSpeaker:
+    """Speaks with the system voice through the mac_speak helper (built from
+    mac_speak.swift), which stays running and takes one JSON command per line."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.proc = None
+        self.helper = os.path.join(HERE, 'mac_speak')
+        if not os.path.exists(self.helper):
+            self.helper = None
+            log('No speech output: build the helper with: swiftc -O mac_speak.swift -o mac_speak')
+
+    def _start(self):
+        args = [self.helper]
+        if self.cfg['rate'] is not None:
+            args += ['-Rate', str(int(self.cfg['rate']))]
+        if self.cfg['voice']:
+            args += ['-Voice', str(self.cfg['voice'])]
+        if self.cfg['language']:
+            args += ['-Language', str(self.cfg['language'])]
+        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, text=True, encoding='ascii')
+
+    def _send(self, msg):
+        if not self.helper:
+            return
+        for attempt in (0, 1):
+            try:
+                if self.proc is None or self.proc.poll() is not None:
+                    self._start()
+                self.proc.stdin.write(json.dumps(msg) + '\n')
+                self.proc.stdin.flush()
+                return
+            except OSError as e:  # helper died: restart it once
+                self.proc = None
+                if attempt:
+                    log('speech helper error:', e)
+
+    def say(self, text, interrupt=True):
+        self._send({'t': 'say', 'text': text, 'interrupt': interrupt})
+
+    def stop(self):
+        if self.proc is not None:
+            self._send({'t': 'stop'})
+
+
+Speaker = WindowsSpeaker if WINDOWS else MacSpeaker if MAC else SpeechdSpeaker
 
 
 def connect_options():
@@ -322,6 +369,13 @@ class Daemon:
                     s = Session(self, t)
                     self.sessions[t['id']] = s
                     asyncio.create_task(s.run())
+                elif self.shared is not None and t.get('title', '').startswith('notificationtoasts'):
+                    # A toast view the agent has not taken over yet (it blanks their titles):
+                    # Big Picture created it before the agent was injected.
+                    try:
+                        await self.shared.evaluate('window.__soa && window.__soa.adoptToast(%s)' % json.dumps(t['title']))
+                    except (OSError, websockets.WebSocketException):
+                        pass  # the shared context is going away; its session cleans up
             await asyncio.sleep(2)
 
 

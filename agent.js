@@ -21,25 +21,58 @@
   // the desktop client's own store/community views.
   if (!SHARED && (window.top !== window || !/GameOverlay/.test(navigator.userAgent))) return;
 
-  const L = {
-    opened: 'Steam overlay', closed: 'Overlay closed', window: 'window', menu: 'menu',
-    button: 'button', link: 'link', edit: 'edit', checkbox: 'checkbox', radio: 'radio button',
-    tab: 'tab', menuitem: 'menu item', slider: 'slider', combo: 'combo box', option: 'option',
-    heading: 'heading', image: 'image', password: 'password edit',
-    checked: 'checked', unchecked: 'not checked', selected: 'selected', expanded: 'expanded',
-    collapsed: 'collapsed', disabled: 'unavailable', unlabeled: 'unlabeled',
-    empty: 'No items', top: 'Top', bottom: 'Bottom', noControl: 'No more controls',
-    editing: 'Editing', blank: 'blank', space: 'space', star: 'star',
-    noHeading: 'No more headings', of: 'of', noWindow: 'No other windows', notification: 'Notification', close: 'Close',
-    search: 'Search', contextMenu: 'Context menu', web: 'web page',
-    mainMenu: 'Main menu', quickAccess: 'Quick access menu',
-    help: 'Up and down arrows move by item. Left and right arrows or Tab move by control. ' +
-      'H and Shift H move by heading. Home and End jump to the first and last item. Enter activates. Menu key or Shift F10 opens the context menu. ' +
-      'F6 switches between overlay windows. Backspace closes the current window or menu. F2 says where you are. F3 reads from here. Control stops speech. ' +
-      'Tab leaves an edit field. Shift Tab or Escape closes the overlay.',
-    gamepadHelp: 'Big Picture overlay. Move with the arrow keys or the controller, the focused item is spoken. ' +
-      'Enter or the A button activates. Escape or the B button goes back. F2 says where you are. F3 reads from here. Control stops speech.',
+  const STRINGS = {
+    en: {
+      opened: 'Steam overlay', closed: 'Overlay closed', window: 'window', menu: 'menu',
+      button: 'button', link: 'link', edit: 'edit', checkbox: 'checkbox', radio: 'radio button',
+      tab: 'tab', menuitem: 'menu item', slider: 'slider', combo: 'combo box', option: 'option',
+      heading: 'heading', image: 'image', password: 'password edit',
+      checked: 'checked', unchecked: 'not checked', selected: 'selected', expanded: 'expanded',
+      collapsed: 'collapsed', disabled: 'unavailable', unlabeled: 'unlabeled',
+      empty: 'No items', top: 'Top', bottom: 'Bottom', noControl: 'No more controls',
+      editing: 'Editing', blank: 'blank', space: 'space', star: 'star',
+      noHeading: 'No more headings', of: 'of', noWindow: 'No other windows', notification: 'Notification', close: 'Close',
+      minimize: 'Minimize', maximize: 'Maximize', ownAvatar: 'Your avatar',
+      search: 'Search', contextMenu: 'Context menu', web: 'web page',
+      mainMenu: 'Main menu', quickAccess: 'Quick access menu',
+      help: 'Up and down arrows move by item. Left and right arrows or Tab move by control. ' +
+        'H and Shift H move by heading. Home and End jump to the first and last item. Enter activates. Menu key or Shift F10 opens the context menu. ' +
+        'F6 switches between overlay windows. Backspace closes the current window or menu. F2 says where you are. F3 reads from here. Control stops speech. ' +
+        'Tab leaves an edit field. Shift Tab or Escape closes the overlay.',
+      gamepadHelp: 'Big Picture overlay. Move with the arrow keys or the controller, the focused item is spoken. ' +
+        'Enter or the A button activates. Escape or the B button goes back. F2 says where you are. F3 reads from here. Control stops speech.',
+    },
+    pl: {
+      opened: 'Nakładka Steam', closed: 'Nakładka zamknięta', window: 'okno', menu: 'menu',
+      button: 'przycisk', link: 'link', edit: 'pole edycji', checkbox: 'pole wyboru', radio: 'przycisk opcji',
+      tab: 'karta', menuitem: 'element menu', slider: 'suwak', combo: 'lista rozwijana', option: 'opcja',
+      heading: 'nagłówek', image: 'obraz', password: 'pole hasła',
+      checked: 'zaznaczone', unchecked: 'niezaznaczone', selected: 'wybrane', expanded: 'rozwinięte',
+      collapsed: 'zwinięte', disabled: 'niedostępne', unlabeled: 'bez etykiety',
+      empty: 'Brak elementów', top: 'Początek', bottom: 'Koniec', noControl: 'Brak dalszych kontrolek',
+      editing: 'Edycja', blank: 'puste', space: 'spacja', star: 'gwiazdka',
+      noHeading: 'Brak dalszych nagłówków', of: 'z', noWindow: 'Brak innych okien', notification: 'Powiadomienie', close: 'Zamknij',
+      minimize: 'Zminimalizuj', maximize: 'Zmaksymalizuj', ownAvatar: 'Twój awatar',
+      search: 'Szukaj', contextMenu: 'Menu kontekstowe', web: 'strona',
+      mainMenu: 'Menu główne', quickAccess: 'Menu szybkiego dostępu',
+      help: 'Strzałki w górę i w dół przechodzą po elementach. Strzałki w lewo i w prawo lub Tab przechodzą po kontrolkach. ' +
+        'H i Shift H przechodzą po nagłówkach. Home i End skaczą na początek i koniec. Enter aktywuje. Klawisz menu lub Shift F10 otwiera menu kontekstowe. ' +
+        'F6 przełącza okna nakładki. Backspace zamyka bieżące okno lub menu. F2 mówi, gdzie jesteś. F3 czyta od bieżącego miejsca. Control przerywa mowę. ' +
+        'Tab wychodzi z pola edycji. Shift Tab lub Escape zamyka nakładkę.',
+      gamepadHelp: 'Nakładka Big Picture. Poruszaj się strzałkami lub kontrolerem, element z fokusem jest odczytywany. ' +
+        'Enter lub przycisk A aktywuje. Escape lub przycisk B cofa. F2 mówi, gdzie jesteś. F3 czyta od bieżącego miejsca. Control przerywa mowę.',
+    },
   };
+  // The mod speaks the language of Steam's own interface. Steam's localization
+  // is not loaded yet when the agent is injected into a fresh page, so the
+  // choice is made again on every tick.
+  let L = STRINGS.en;
+  function pickLanguage() {
+    const lm = window.LocalizationManager;
+    const code = String((lm && lm.m_rgLocalesToUse && lm.m_rgLocalesToUse[0]) || document.documentElement.lang || navigator.language || 'en');
+    L = STRINGS[code.slice(0, 2).toLowerCase()] || STRINGS.en;
+  }
+  pickLanguage();
 
   const send = (msg) => { try { window.__soaBridge && window.__soaBridge(JSON.stringify(msg)); } catch (e) { /* daemon gone */ } };
   const say = (text, interrupt = true) => { text = clean(text).replace(/\.+\. /g, '. '); if (text) send({ t: 'say', text, interrupt }); };
@@ -52,6 +85,7 @@
   const CONTROL_ROLES = new Set(['button', 'link', 'checkbox', 'radio', 'tab', 'menuitem', 'menuitemcheckbox',
     'menuitemradio', 'option', 'switch', 'slider', 'textbox', 'combobox', 'treeitem', 'searchbox']);
   const ICON_NAMES = { X_Line: 'close', X: 'close', MagnifyingGlass: 'search', DownArrowContextMenu: 'contextMenu' };
+  const CLASS_NAMES = { closeButton: 'close', minimizeButton: 'minimize', maximizeButton: 'maximize', currentUserAvatar: 'ownAvatar' };
   const VIEW_TITLES = { MainMenu: 'mainMenu', QuickAccess: 'quickAccess' };
   const GAMEPAD_UI = 4; // EUIMode of Big Picture windows
   const GENERIC_CLASSES = new Set(['DialogButton', 'Focusable', 'Panel', 'Primary', 'Secondary', 'Disabled', 'Active']);
@@ -202,7 +236,10 @@
       const m = cls.match(/SVGIcon_(?!Button\b)(\w+)/);
       if (m) return L[ICON_NAMES[m[1]]] || splitCamel(m[1]);
     }
-    const names = (el.getAttribute('class') || '').split(/\s+/).filter((c) => /^[A-Za-z][a-z]+([A-Z][a-z]+)*$/.test(c) && !GENERIC_CLASSES.has(c));
+    const classes = (el.getAttribute('class') || '').split(/\s+/);
+    const known = classes.find((c) => CLASS_NAMES.hasOwnProperty(c));
+    if (known) return L[CLASS_NAMES[known]];
+    const names = classes.filter((c) => /^[A-Za-z][a-z]+([A-Z][a-z]+)*$/.test(c) && !GENERIC_CLASSES.has(c));
     return names.length ? splitCamel(names[names.length - 1]) : '';
   }
 
@@ -221,6 +258,9 @@
     t = innerLabel(el, win);
     if (t) return t;
     t = clean(el.getAttribute('title') || el.getAttribute('data-tooltip-text') || el.getAttribute('placeholder'));
+    if (t) return t;
+    const titled = el.querySelector('[title]');  // an icon inside that carries the name, in Steam's language
+    t = titled ? clean(titled.getAttribute('title')) : '';
     if (t) return t;
     for (let p = el.parentElement, i = 0; p && i < 3; p = p.parentElement, i++) {
       if (p.children.length > 1 || clean(p.textContent) !== clean(el.textContent)) break;
@@ -309,7 +349,7 @@
   // ------------------------------------------------------------ window state
 
   const wins = new Map(); // Window -> state
-  const S = { lastToast: '', lastToastAt: 0, current: null, inWeb: false, remote: false, suppressWinFocus: 0, lastFocusSpoken: 0, shown: new Set(), lastSpokenWindow: null, suppressFocus: 0, timer: null, toastTimers: new Map(), toastViews: new Set(), openedAt: 0, openPrefix: '' };
+  const S = { lastToast: '', lastToastAt: 0, current: null, inWeb: false, remote: false, suppressWinFocus: 0, lastFocusSpoken: 0, shown: new Set(), lastSpokenWindow: null, suppressFocus: 0, timer: null, toastTimers: new Map(), toastViews: new Set(), openedAt: 0, openPrefix: '', metaDown: false, lastKeyAt: 0 };
 
   function overlayPopups() {
     const out = [];
@@ -364,6 +404,8 @@
     if (st.toast && CFG.toasts) hideToastFromAT(win);
     if (!st.toast) {
       on(win, 'keydown', onKeyDown, true);
+      on(win, 'keyup', (e) => { if (e.key === 'Meta') S.metaDown = false; }, true);
+      on(win, 'blur', (e) => { if (e.target === win) S.metaDown = false; }, true);
       on(win, 'focus', (e) => { if (e.target === win || e.target === win.document) onWindowFocus(win); }, true);
       on(win, 'focusin', (e) => onFocusIn(win, e), true);
       on(win, 'input', (e) => onInput(win, e), true);
@@ -528,6 +570,7 @@
   // Polls popup creation and visibility: Steam reuses hidden popups, so there
   // is no single event that says "this overlay window is now on screen".
   function tick() {
+    pickLanguage();
     const wasOpen = S.shown.size > 0; // before unhooking: a quitting game destroys its windows outright
     const infos = overlayPopups();
     const live = new Set(infos.map((i) => i.win));
@@ -538,6 +581,7 @@
     for (const [win, st] of wins) if (!st.toast && isShown(win)) shown.add(win);
     const fresh = [...shown].filter((w) => !S.shown.has(w));
     S.shown = shown;
+    if (wasOpen && !shown.size) S.metaDown = false;
 
     if (!SHARED) {
       if (!wasOpen && shown.size && document.hasFocus()) onWindowFocus(window);
@@ -572,6 +616,10 @@
       return;
     }
     if ((S.current === win && !S.inWeb) || S.suppressWinFocus > Date.now()) return;
+    // Coming back to the game from another application gives the focus to
+    // whichever overlay window the system likes. Only a focus change that
+    // follows the user's own key press moves the cursor to another window.
+    if (Date.now() - S.lastKeyAt > 1500 && S.shown.has(S.current) && !S.inWeb) return;
     // Big Picture: focus passing through the empty backdrop says nothing new.
     if (wins.get(win).gamepad && !focusItem(win) && S.shown.has(S.current)) return;
     setCurrent(win);
@@ -892,9 +940,15 @@
   function onKeyDown(e) {
     const key = e.key;
     const swallow = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+    // macOS: leaving the game with Cmd+Tab loses the key's release, and the
+    // overlay then reports Cmd as held on every later key. Believe the flag
+    // only while a Cmd press was seen since the overlay last had the keyboard.
+    if (key === 'Meta') S.metaDown = true;
+    const meta = e.metaKey && S.metaDown;
+    if (key !== 'Shift' && key !== 'Alt' && key !== 'Meta' && key !== 'Control') S.lastKeyAt = Date.now();
     if (!SHARED && S.remote) {
       if (key === 'Control') send({ t: 'stop' });
-      else if (key !== 'Shift' && key !== 'Alt' && key !== 'Meta' && !e.altKey && !e.metaKey) send({ t: 'key', key, shift: e.shiftKey, ctrl: e.ctrlKey });
+      else if (key !== 'Shift' && key !== 'Alt' && key !== 'Meta' && !e.altKey && !meta) send({ t: 'key', key, shift: e.shiftKey, ctrl: e.ctrlKey });
       swallow();
       return;
     }
@@ -921,7 +975,7 @@
       echoKey(active, e);
       return;
     }
-    if (e.altKey || e.metaKey) return;
+    if (e.altKey || meta) return;
     // The overlay's key translation has no name for the Menu key: it arrives blank.
     const menuKey = key === '\u0000' && !e.code && !e.keyCode;
     if (command(win, menuKey ? 'ContextMenu' : key, e.shiftKey, e.ctrlKey)) swallow();
@@ -929,6 +983,7 @@
 
   // Called by the daemon with a key an overlay web page forwarded to us.
   function remoteKey(key, shift, ctrl) {
+    S.lastKeyAt = Date.now();
     if (S.current && wins.has(S.current)) command(S.current, key, shift, ctrl);
   }
 
@@ -962,6 +1017,19 @@
       }
       return null;
     },
+    // Daemon relay: a toast view that was created before this agent was
+    // injected (Big Picture keeps one for as long as it runs), so the hook on
+    // window.open never saw it. An empty URL returns the window of that name.
+    adoptToast(name) {
+      if (!originalOpen || !/notificationtoasts/i.test(name)) return;
+      for (const w of S.toastViews) { try { if (w.name === name) return; } catch (e) { /* window gone */ } }
+      const w = originalOpen.call(window, '', name);
+      if (!w) return;
+      // The view went away in the meantime and this is a new, empty window.
+      if (!w.document.getElementById('browserview_target') && !w.document.getElementById('popup_target')) { w.close(); return; }
+      S.toastViews.add(w);
+      hideToastFromAT(w);
+    },
     // Daemon relay: F6 in the shared context just moved focus into a web page.
     announceIfFocused() { if (!SHARED && document.visibilityState === 'visible' && document.hasFocus() && Date.now() - S.lastFocusSpoken > 1000) { S.lastFocusSpoken = Date.now(); S.current = window; S.remote = false; announceWindow(window); } },
     state: () => ({ shared: SHARED, windows: [...wins.values()].map((s) => s.key), shown: [...S.shown].map((w) => wins.get(w).key), current: S.current && wins.get(S.current) ? wins.get(S.current).key : null }),
@@ -969,6 +1037,8 @@
     destroy() {
       clearInterval(S.timer);
       if (originalOpen) window.open = originalOpen;
+      // Give the toast views their names back: that is how the daemon finds them for the next agent.
+      for (const w of S.toastViews) { try { w.document.title = w.name; } catch (e) { /* window gone */ } }
       for (const t of S.toastTimers.values()) clearTimeout(t);
       for (const win of [...wins.keys()]) unhook(win);
       delete window.__soa;

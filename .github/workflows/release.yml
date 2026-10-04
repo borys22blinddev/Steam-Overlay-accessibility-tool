@@ -1,4 +1,4 @@
-# Builds the single-file program for Windows and Linux and attaches both files
+# Builds the single-file program for Windows, Linux and macOS and attaches the files
 # to the GitHub release of the pushed tag (git tag v1.1 && git push --tags).
 name: release
 on:
@@ -11,11 +11,11 @@ jobs:
     strategy:
       matrix:
         # An old Ubuntu, so that the Linux build also runs on systems with an older glibc.
-        os: [ubuntu-22.04, windows-latest]
+        os: [ubuntu-22.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - if: runner.os == 'Windows'
+      - if: runner.os != 'Linux'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'

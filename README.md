@@ -1,9 +1,9 @@
 # Steam Overlay Access
 
-Dostępność nakładki Steam (Shift+Tab w grze) dla osób niewidomych na Linuksie
-i Windowsie. Bez OCR: nakładka to strona WWW renderowana przez `steamwebhelper`
+Dostępność nakładki Steam (Shift+Tab w grze) dla osób niewidomych na Linuksie,
+Windowsie i macOS. Bez OCR: nakładka to strona WWW renderowana przez `steamwebhelper`
 (Chromium/CEF), więc mod czyta ją wprost z jej DOM i mówi przez speech-dispatcher
-(Linux) albo przez NVDA lub SAPI 5 (Windows).
+(Linux), przez NVDA lub SAPI 5 (Windows) albo głosem systemowym (macOS).
 
 ## Jak to działa
 
@@ -27,15 +27,48 @@ i uruchom go. Python nie jest potrzebny.
 
       chmod +x steam-overlay-access-linux && ./steam-overlay-access-linux
 
+- **macOS** (Apple Silicon): `steam-overlay-access-mac`, w Terminalu, w katalogu
+  z pobranym plikiem (pierwsze polecenie zdejmuje kwarantannę, którą przeglądarka
+  nakłada na pobrane pliki):
+
+      xattr -d com.apple.quarantine steam-overlay-access-mac
+      chmod +x steam-overlay-access-mac && ./steam-overlay-access-mac
+
 Program kopiuje się do katalogu użytkownika, włącza port debugowania Steama,
 dopisuje się do autostartu (Windows: rejestr `HKCU\...\Run`; Linux: usługa
-użytkownika systemd, a bez systemd `~/.config/autostart`) i od razu startuje.
+użytkownika systemd, a bez systemd `~/.config/autostart`; macOS: agent launchd
+w `~/Library/LaunchAgents`) i od razu startuje.
 Potem jednorazowo zrestartuj Steama. Pobrany plik można skasować.
 
 Aktualizacja: pobierz nowy plik i uruchom go. Usunięcie: na Windowsie uruchom
-plik ponownie i wybierz „No” (Nie); na Linuksie `./steam-overlay-access-linux --uninstall`.
+plik ponownie i wybierz „No” (Nie); na Linuksie `./steam-overlay-access-linux --uninstall`,
+na macOS `./steam-overlay-access-mac --uninstall`.
 
 Na Linuksie do mowy potrzebny jest speech-dispatcher (ten sam, którego używa Orca).
+
+## Mowa na macOS
+
+Mod mówi syntezatorem systemowym i trzyma się ustawień z Ustawienia systemowe →
+Dostępność → Czytaj i mów: używa wybranego tam głosu, tempa i głośności. Gdy
+włączone jest tam wykrywanie języków, każda wypowiedź jest czytana głosem
+ustawionym dla jej języka (np. angielskie nazwy przycisków głosem angielskim).
+Zmiany w ustawieniach działają od razu, bez restartu. VoiceOver nie musi być
+uruchomiony.
+
+Mac nie ma klawisza Menu: menu kontekstowe otwiera Shift+F10. Na klawiaturze
+laptopa Home / End / Page Up / Page Down to Fn + strzałki, a klawisze F1–F6
+mogą wymagać Fn, zależnie od ustawień klawiatury.
+
+## Uruchamianie ze źródeł (macOS)
+
+Wymagane: Python 3 z modułem `websockets` i narzędzia wiersza poleceń Xcode.
+
+    swiftc -O mac_speak.swift -o mac_speak
+    touch ~/Library/Application\ Support/Steam/.cef-enable-remote-debugging
+    touch ~/Library/Application\ Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/.cef-enable-remote-debugging
+    ./soa_daemon.py -v
+
+Potem jednorazowo zrestartuj Steama.
 
 ## Uruchamianie ze źródeł (Linux)
 
@@ -104,6 +137,9 @@ zmiany jego stanu (przełącznik, suwak).
 Dodatkowo czytane są: dymki powiadomień Steama (w grze i na pulpicie),
 nowe wiadomości czatu przy otwartej nakładce oraz wpisywane znaki.
 
+Własne komunikaty moda (nazwy kontrolek, pomoc) są w języku interfejsu Steama:
+po polsku, gdy Steam jest po polsku, a w pozostałych językach po angielsku.
+
 Okienka dymków na pulpicie są ukrywane przed systemowym czytnikiem ekranu
 (Orca czytała ich techniczną nazwę, np. `notificationtoasts_10016_desktop`);
 treść dymka wypowiada sam mod.
@@ -117,7 +153,7 @@ Opcjonalny plik `~/.config/steam-overlay-access/config.json`:
       "toasts": true,      // czytanie dymków powiadomień
       "chat": true,        // czytanie przychodzących wiadomości czatu
       "rate": null,        // tempo mowy -100..100
-      "voice": null,       // głos (Windows: fragment nazwy głosu SAPI, np. "Paulina")
+      "voice": null,       // głos (Windows, macOS: fragment nazwy głosu, np. "Paulina", "Zosia")
       "module": null,      // moduł speech-dispatchera (tylko Linux)
       "language": null,    // np. "en", jeśli Steam jest po angielsku, a syntezator po polsku
       "screenreader": true, // Windows: mów przez NVDA, gdy jest uruchomiony
@@ -126,16 +162,18 @@ Opcjonalny plik `~/.config/steam-overlay-access/config.json`:
 
 (Komentarze powyżej są tylko opisem; w prawdziwym pliku JSON ich nie wpisuj.)
 Na Windowsie plik leży w `%APPDATA%\steam-overlay-access\config.json`, a
-ustawienia `rate`, `voice` i `language` dotyczą tylko SAPI.
+ustawienia `rate`, `voice` i `language` dotyczą tylko SAPI. Na macOS te trzy
+ustawienia zastępują to, co wybrano w „Czytaj i mów”; bez nich mod bierze
+wszystko z ustawień systemowych.
 Po zmianie: `systemctl --user restart steam-overlay-access` (Linux) albo
-ponownie uruchom instalator (Windows).
+ponownie uruchom instalator (Windows, macOS).
 
 ## Budowanie plików do wydania
 
 `./build.sh` (wymaga `pip install pyinstaller websockets`) buduje do `dist/`
 plik dla systemu, na którym jest uruchomiony. Na GitHubie robi to
-`.github/workflows/release.yml`: wypchnięcie taga `v*` buduje oba pliki
-i dołącza je do wydania.
+`.github/workflows/release.yml`: wypchnięcie taga `v*` buduje pliki dla
+wszystkich trzech systemów i dołącza je do wydania.
 
 ## Uwagi
 

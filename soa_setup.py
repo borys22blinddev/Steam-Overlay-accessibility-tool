@@ -7,13 +7,14 @@ at logon and starts the daemon. `--daemon` runs the daemon (that is what the
 autostart entry calls), `--uninstall` removes everything again.
 """
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
 import time
 
 import soa_daemon
-from soa_daemon import WINDOWS
+from soa_daemon import MAC, WINDOWS
 
 NAME = 'Steam Overlay Access'
 APP = 'steam-overlay-access'
@@ -22,6 +23,12 @@ RUN_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
 if WINDOWS:
     INSTALL_DIR = os.path.join(os.environ.get('LOCALAPPDATA') or os.path.expanduser('~'), APP)
     TARGET = os.path.join(INSTALL_DIR, APP + '.exe')
+elif MAC:
+    INSTALL_DIR = os.path.expanduser('~/Library/Application Support/' + APP)
+    TARGET = os.path.join(INSTALL_DIR, APP)
+    LABEL = 'io.github.borys22blinddev.' + APP
+    PLIST = os.path.expanduser('~/Library/LaunchAgents/%s.plist' % LABEL)
+    DOMAIN = 'gui/%d' % os.getuid()
 else:
     INSTALL_DIR = os.path.join(os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'), APP)
     TARGET = os.path.join(INSTALL_DIR, APP)
@@ -67,7 +74,11 @@ def tell(text):
         ctypes.windll.user32.MessageBoxW(None, text, NAME, 0x40)  # MB_ICONINFORMATION
         return
     print(text, flush=True)
-    if not sys.stdout.isatty():  # started from a file manager: nobody sees the output
+    if MAC:
+        if not sys.stdout.isatty():
+            run('osascript', '-e', 'on run a', '-e', 'display dialog (item 1 of a) with title (item 2 of a) buttons {"OK"}',
+                '-e', 'end run', text, NAME)
+    elif not sys.stdout.isatty():  # started from a file manager: nobody sees the output
         run('spd-say', '--', text)
         run('notify-send', NAME, text)
 
@@ -83,6 +94,11 @@ def steam_dirs():
                     found.append(winreg.QueryValueEx(k, value)[0])
             except OSError:
                 pass
+    elif MAC:
+        # Steam's data directory and the client itself, which lives apart from it.
+        found += [os.path.expanduser(p) for p in (
+            '~/Library/Application Support/Steam',
+            '~/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS')]
     else:
         found += [os.path.expanduser(p) for p in (
             '~/.steam/steam', '~/.local/share/Steam',
@@ -108,6 +124,9 @@ def stop_daemon():
             " ($_.ExecutablePath -eq $env:SOA_TARGET -and $_.CommandLine -like '*--daemon*') -or"
             " ($_.Name -like 'python*' -and $_.CommandLine -like '*soa_daemon.py*') } |"
             " ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+    elif MAC:
+        run('launchctl', 'bootout', DOMAIN + '/' + LABEL)
+        run('pkill', '-f', TARGET + ' --daemon')
     else:
         run('systemctl', '--user', 'stop', APP + '.service')
         run('pkill', '-f', TARGET + ' --daemon')
@@ -126,6 +145,9 @@ def remove_autostart():
                            'Programs', 'Startup', NAME + '.lnk')
         if os.path.exists(lnk):
             os.remove(lnk)
+    elif MAC:
+        if os.path.exists(PLIST):
+            os.remove(PLIST)
     else:
         run('systemctl', '--user', 'disable', APP + '.service')
         for path in (UNIT, DESKTOP):
@@ -159,6 +181,20 @@ def add_autostart_and_start():
             winreg.SetValueEx(k, NAME, 0, winreg.REG_SZ, '"%s" --daemon' % TARGET)
         subprocess.Popen([TARGET, '--daemon'], env=child_env(), close_fds=True,
                          creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+    elif MAC:
+        os.makedirs(os.path.dirname(PLIST), exist_ok=True)
+        with open(PLIST, 'wb') as f:
+            plistlib.dump({'Label': LABEL,
+                           'ProgramArguments': [TARGET, '--daemon'],
+                           'RunAtLoad': True,
+                           'KeepAlive': {'SuccessfulExit': False},
+                           'StandardErrorPath': os.path.expanduser('~/Library/Logs/%s.log' % APP)}, f)
+        for attempt in range(10):  # launchd may still be letting go of the old service
+            if run('launchctl', 'bootstrap', DOMAIN, PLIST) == 0:
+                break
+            time.sleep(0.5)
+        else:
+            raise OSError('launchctl bootstrap')
     elif have_systemd():
         os.makedirs(os.path.dirname(UNIT), exist_ok=True)
         with open(UNIT, 'w', encoding='utf-8') as f:
