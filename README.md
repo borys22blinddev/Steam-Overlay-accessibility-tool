@@ -56,11 +56,10 @@ przy każdym logowaniu. Usunięcie: `uninstall.bat`.
 Mowa:
 
 - Domyślnie SAPI 5, czyli głos ustawiony w systemie (Panel sterowania → Mowa).
-- Żeby mod mówił przez NVDA, skopiuj obok `soa_daemon.py` (albo obok zainstalowanego
-  `%LOCALAPPDATA%\steam-overlay-access\steam-overlay-access.exe`) plik
-  `nvdaControllerClient.dll` w wersji zgodnej z Pythonem (zwykle 64-bitowej);
-  jest w paczce „controller client" z nvaccess.org. Gdy NVDA nie działa, mod
-  wraca do SAPI.
+- Gdy działa NVDA, mod mówi przez NVDA. Plik do wydania ma w sobie
+  `nvdaControllerClient.dll` (licencja LGPL 2.1, z nvaccess.org), a
+  `install.bat` sam go pobiera obok `soa_daemon.py`
+  (`fetch_nvda_client.py`). Gdy NVDA nie działa, mod wraca do SAPI.
 
 Ręczne uruchomienie z podglądem: `python soa_daemon.py -v`.
 
@@ -100,6 +99,10 @@ zmiany jego stanu (przełącznik, suwak).
 | F2 | gdzie jestem |
 | F3 | czytaj od bieżącego miejsca |
 | Ctrl | przerwij mowę |
+
+Strony otwierane przez nakładkę Big Picture (sklep, zatwierdzanie zakupu w grze)
+obsługuje się tak samo jak strony w nakładce na pulpicie: wirtualnym kursorem.
+Ekran zakupu jest czytany od razu, gdy się pojawi.
 
 Dodatkowo czytane są: dymki powiadomień Steama (w grze i na pulpicie),
 nowe wiadomości czatu przy otwartej nakładce oraz wpisywane znaki.

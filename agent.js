@@ -5,8 +5,9 @@
 //    game overview, context menus, toasts). One agent drives all of them.
 //    In Big Picture the overlay is Steam's gamepad UI: there Steam's own focus
 //    navigation stays in charge and the agent only speaks what gets focus.
-//  * a standalone overlay web page (guides, discussions, web browser): the
-//    agent drives just that page ("page mode").
+//  * a standalone overlay web page (guides, discussions, web browser, store
+//    checkout and in-game purchase approval): the agent drives just that page
+//    ("page mode").
 //
 // It adds a screen-reader style virtual cursor on top of the overlay DOM and
 // sends everything that should be spoken to the daemon through the
@@ -18,8 +19,14 @@
   const CFG = Object.assign({ echo: true, toasts: true, chat: true }, /*__SOA_CONFIG__*/{});
   const SHARED = /(^|\.)steamloopback\.host$/.test(location.hostname);
   // Web pages are only ours when the in-game overlay browser shows them, never
-  // the desktop client's own store/community views.
-  if (!SHARED && (window.top !== window || !/GameOverlay/.test(navigator.userAgent))) return;
+  // the desktop client's own store/community views. The desktop overlay marks
+  // its pages with a user agent of their own. Big Picture's overlay (also its
+  // purchase approval) gives them the same one as Big Picture itself: such a
+  // page only wakes up while an in-game overlay is open (see setOverlay).
+  const GAMEPAD_PAGE = !SHARED && !/GameOverlay/.test(navigator.userAgent) && /Valve Steam Gamepad/.test(navigator.userAgent);
+  if (!SHARED && (window.top !== window || !(GAMEPAD_PAGE || /GameOverlay/.test(navigator.userAgent)))) return;
+  // Checkout and purchase approval: spoken as soon as they appear, focus or not.
+  const CHECKOUT = !SHARED && /(^|\.)steampowered\.com$/.test(location.hostname) && /\/checkout/.test(location.pathname);
 
   const L = {
     opened: 'Steam overlay', closed: 'Overlay closed', window: 'window', menu: 'menu',
@@ -32,7 +39,7 @@
     editing: 'Editing', blank: 'blank', space: 'space', star: 'star',
     noHeading: 'No more headings', of: 'of', noWindow: 'No other windows', notification: 'Notification', close: 'Close',
     search: 'Search', contextMenu: 'Context menu', web: 'web page',
-    mainMenu: 'Main menu', quickAccess: 'Quick access menu',
+    mainMenu: 'Main menu', quickAccess: 'Quick access menu', purchase: 'Purchase',
     help: 'Up and down arrows move by item. Left and right arrows or Tab move by control. ' +
       'H and Shift H move by heading. Home and End jump to the first and last item. Enter activates. Menu key or Shift F10 opens the context menu. ' +
       'F6 switches between overlay windows. Backspace closes the current window or menu. F2 says where you are. F3 reads from here. Control stops speech. ' +
@@ -309,7 +316,7 @@
   // ------------------------------------------------------------ window state
 
   const wins = new Map(); // Window -> state
-  const S = { lastToast: '', lastToastAt: 0, current: null, inWeb: false, remote: false, suppressWinFocus: 0, lastFocusSpoken: 0, shown: new Set(), lastSpokenWindow: null, suppressFocus: 0, timer: null, toastTimers: new Map(), toastViews: new Set(), openedAt: 0, openPrefix: '' };
+  const S = { overlay: !GAMEPAD_PAGE, overlayOpen: null, lastToast: '', lastToastAt: 0, current: null, inWeb: false, remote: false, suppressWinFocus: 0, lastFocusSpoken: 0, shown: new Set(), lastSpokenWindow: null, suppressFocus: 0, timer: null, toastTimers: new Map(), toastViews: new Set(), openedAt: 0, openPrefix: '' };
 
   function overlayPopups() {
     const out = [];
@@ -394,6 +401,7 @@
     if (!SHARED) return clean(win.document.title) || L.web;
     let t = clean(win.document.title);
     if (/^SP Overlay/.test(t)) t = L.opened;
+    if ((!t || /^about:blank/.test(t)) && /^MTXOverlayBrowser/.test(st.key)) t = L.purchase;
     if (!t || /^about:blank/.test(t)) { const k = st.key.split('_'); t = splitCamel(k[0] === 'OverlayBrowser' && k[1] ? k[1] : k[0]); }
     if (/^contextmenu/i.test(st.key)) t = L.menu;
     // Browser views are titled with their internal name, e.g. MainMenu_uid68.
@@ -521,13 +529,19 @@
     if (!prefix && wins.get(win).gamepad && Date.now() - S.openedAt < 1500) prefix = S.openPrefix;
     // A window that only frames a web page: the page's own agent speaks once
     // it has focus, so do not talk over it with the browser chrome.
-    if (!wins.get(win).gamepad && webViews(win).length && !win.document.hasFocus()) { say([prefix, windowTitle(win) + ', ' + L.window].filter(Boolean).join('. ')); return; }
+    if (!wins.get(win).gamepad && webViews(win).length && !win.document.hasFocus()) {
+      say([prefix, windowTitle(win) + ', ' + L.window].filter(Boolean).join('. '));
+      // A game's purchase is approved in its page: go straight there.
+      if (/^MTXOverlayBrowser/.test(wins.get(win).key)) focusWeb(win, webViews(win)[0]);
+      return;
+    }
     announceWindow(win, prefix);
   }
 
   // Polls popup creation and visibility: Steam reuses hidden popups, so there
   // is no single event that says "this overlay window is now on screen".
   function tick() {
+    if (!S.overlay) { for (const win of [...wins.keys()]) unhook(win); S.shown.clear(); return; }
     const wasOpen = S.shown.size > 0; // before unhooking: a quitting game destroys its windows outright
     const infos = overlayPopups();
     const live = new Set(infos.map((i) => i.win));
@@ -540,9 +554,10 @@
     S.shown = shown;
 
     if (!SHARED) {
-      if (!wasOpen && shown.size && document.hasFocus()) onWindowFocus(window);
+      if (!wasOpen && shown.size && (document.hasFocus() || CHECKOUT)) onWindowFocus(window);
       return;
     }
+    if (S.overlayOpen !== shown.size > 0) { S.overlayOpen = shown.size > 0; send({ t: 'overlay', open: S.overlayOpen }); }
     if (!shown.size) {
       if (wasOpen) { S.current = null; say(L.closed); }
       return;
@@ -775,17 +790,21 @@
     if (entries.length < 2) { say(L.noWindow + (S.current ? '. ' + windowTitle(S.current) : '')); return; }
     const i = entries.findIndex((en) => en.win === S.current && !!en.web === S.inWeb);
     const next = entries[(i + dir + entries.length) % entries.length];
+    if (next.web) { focusWeb(next.win, next.web); return; }
     S.current = next.win;
-    setWeb(!!next.web);
-    if (next.web) {
-      try {
-        next.win.SteamClient.Window.BringToFront();
-        setTimeout(() => { try { next.web.SetFocus(true); } catch (e) { /* view gone */ } send({ t: 'webfocus' }); }, 200);
-      } catch (e) { /* window gone */ }
-      return;
-    }
+    setWeb(false);
     takeKeyFocus(next.win);
     announceWindow(next.win);
+  }
+
+  // Hands the keyboard to a web page; its own agent then speaks.
+  function focusWeb(win, view) {
+    S.current = win;
+    setWeb(true);
+    try {
+      win.SteamClient.Window.BringToFront();
+      setTimeout(() => { try { view.SetFocus(true); } catch (e) { /* view gone */ } send({ t: 'webfocus' }); }, 200);
+    } catch (e) { /* window gone */ }
   }
 
   const framingWindow = (title) => {
@@ -856,8 +875,9 @@
       case 'Enter': case ' ': activate(win); return true;
       case 'ContextMenu': contextMenu(win); return true;
       case 'F10': if (!shift) return false; contextMenu(win); return true;
-      case 'Backspace': if (SHARED) closeWindow(win); else send({ t: 'closeweb', title: document.title }); return true;
-      case 'F6': cycle(shift ? -1 : 1); return true;
+      // Big Picture: Steam itself closes its pages and has no window cycling.
+      case 'Backspace': if (GAMEPAD_PAGE) return false; if (SHARED) closeWindow(win); else send({ t: 'closeweb', title: document.title }); return true;
+      case 'F6': if (GAMEPAD_PAGE) return false; cycle(shift ? -1 : 1); return true;
       case 'F1': say(L.help); return true;
       case 'F2': whereAmI(win); return true;
       case 'F3': readFromHere(win); return true;
@@ -942,14 +962,17 @@
   S.timer = setInterval(() => { try { tick(); } catch (err) { send({ t: 'log', text: 'tick: ' + (err && err.stack || err) }); } }, 250);
 
   window.__soa = {
-    version: 4,
+    version: 5,
     cycle,
     cycleFromPage,
     pageFocused,
     remoteKey,
     // Daemon relay: Backspace was pressed inside an overlay web page.
     closeFraming(title) { const w = framingWindow(title); if (w) closeWindow(w); },
-    setRemote(v) { S.remote = !!v; },
+    // Big Picture pages own the keys they get: Steam focuses them on purpose.
+    setRemote(v) { S.remote = !!v && !GAMEPAD_PAGE; },
+    // Daemon relay: whether an in-game overlay is on screen.
+    setOverlay(v) { S.overlay = !GAMEPAD_PAGE || !!v; },
     // Debug/test helper: put the cursor on the first item whose description contains `text`.
     find(text, key) {
       for (const [w, st] of wins) {
@@ -975,4 +998,5 @@
     },
   };
   send({ t: 'log', text: 'agent loaded (' + (SHARED ? 'shared' : 'page: ' + location.host) + ')' });
+  if (!SHARED) send({ t: 'hello' });
 })();
