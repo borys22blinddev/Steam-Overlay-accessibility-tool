@@ -24,6 +24,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y python3-pip python3-speechd binutils
       - run: python3 -m pip install pyinstaller websockets || python -m pip install pyinstaller websockets
         shell: bash
+      # NVDA's controller client (LGPL 2.1) goes into the Windows build, so that
+      # it speaks through NVDA with nothing to copy by hand.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = '2026.2'
+          Invoke-WebRequest "https://download.nvaccess.org/releases/$v/nvda_${v}_controllerClient.zip" -OutFile nvda.zip
+          Expand-Archive nvda.zip -DestinationPath nvda
+          $dll = Get-ChildItem nvda -Recurse -Filter nvdaControllerClient.dll |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]' } | Select-Object -First 1
+          if (-not $dll) { throw 'x64 nvdaControllerClient.dll not found in the NVDA controller client archive' }
+          Copy-Item $dll.FullName nvdaControllerClient.dll
       - run: sh build.sh
         shell: bash
       - uses: actions/upload-artifact@v4

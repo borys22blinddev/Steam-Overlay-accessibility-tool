@@ -42,6 +42,26 @@ if (-not (Test-Path (Join-Path $Steam '.cef-enable-remote-debugging'))) {
     exit 1
 }
 
+# NVDA's controller client lets the daemon speak through NVDA instead of SAPI.
+$Dll = Join-Path $Dir 'nvdaControllerClient.dll'
+if (-not (Test-Path $Dll)) {
+    try {
+        $v = '2026.2'
+        $arch = & $Python -c 'import platform, struct; print(''arm64'' if platform.machine() == ''ARM64'' else ''x64'' if struct.calcsize(''P'') == 8 else ''x86'')'
+        $zip = Join-Path $env:TEMP 'nvda_controllerClient.zip'
+        $out = Join-Path $env:TEMP 'nvda_controllerClient'
+        Write-Host 'Downloading the NVDA controller client...'
+        Invoke-WebRequest "https://download.nvaccess.org/releases/$v/nvda_${v}_controllerClient.zip" -OutFile $zip -UseBasicParsing
+        Expand-Archive $zip -DestinationPath $out -Force
+        $found = Get-ChildItem $out -Recurse -Filter nvdaControllerClient.dll |
+            Where-Object { $_.FullName -match "[\\/]$arch[\\/]" } | Select-Object -First 1
+        if ($found) { Copy-Item $found.FullName $Dll }
+    } catch {}
+    if (-not (Test-Path $Dll)) {
+        Write-Host 'Could not get the NVDA controller client; speech will use SAPI. See README to add it by hand.'
+    }
+}
+
 # pythonw.exe runs without a console window
 $Pythonw = Join-Path (Split-Path -Parent $Python) 'pythonw.exe'
 if (-not (Test-Path $Pythonw)) { $Pythonw = $Python }

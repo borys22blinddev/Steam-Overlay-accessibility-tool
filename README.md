@@ -3,7 +3,7 @@
 Dostępność nakładki Steam (Shift+Tab w grze) dla osób niewidomych na Linuksie
 i Windowsie. Bez OCR: nakładka to strona WWW renderowana przez `steamwebhelper`
 (Chromium/CEF), więc mod czyta ją wprost z jej DOM i mówi przez speech-dispatcher
-(Linux) albo przez NVDA lub SAPI 5 (Windows).
+(Linux) albo przez NVDA, a bez NVDA przez SAPI 5 (Windows).
 
 ## Jak to działa
 
@@ -55,14 +55,26 @@ przy każdym logowaniu. Usunięcie: `uninstall.bat`.
 
 Mowa:
 
-- Domyślnie SAPI 5, czyli głos ustawiony w systemie (Panel sterowania → Mowa).
-- Żeby mod mówił przez NVDA, skopiuj obok `soa_daemon.py` (albo obok zainstalowanego
-  `%LOCALAPPDATA%\steam-overlay-access\steam-overlay-access.exe`) plik
-  `nvdaControllerClient.dll` w wersji zgodnej z Pythonem (zwykle 64-bitowej);
-  jest w paczce „controller client" z nvaccess.org. Gdy NVDA nie działa, mod
-  wraca do SAPI.
+- Gdy NVDA jest uruchomiony, mod mówi wyłącznie przez NVDA. Potrzebna do tego
+  biblioteka `nvdaControllerClient.dll` jest wbudowana w plik exe, a przy
+  instalacji ze źródeł pobiera ją `install.bat`.
+- SAPI 5 (głos ustawiony w systemie) jest używane tylko wtedy, gdy NVDA nie
+  jest uruchomiony. `"sapi": false` w konfiguracji wyłącza SAPI całkowicie.
+- Gdyby pobranie biblioteki się nie udało: skopiuj obok `soa_daemon.py` plik
+  `nvdaControllerClient.dll` w wersji zgodnej z Pythonem (zwykle `x64`) z paczki
+  „controller client" z nvaccess.org.
+- NVDA nie mówi, gdy program z fokusem (np. gra) jest w trybie uśpienia NVDA.
 
 Ręczne uruchomienie z podglądem: `python soa_daemon.py -v`.
+
+Zainstalowany plik exe nie ma konsoli, więc podgląd zapisuje się do pliku.
+Najpierw zakończ działającego w tle demona (Menedżer zadań →
+`steam-overlay-access.exe`), potem:
+
+    "%LOCALAPPDATA%\steam-overlay-access\steam-overlay-access.exe" --daemon -v --log "%TEMP%\soa.log"
+
+W logu widać m.in. znalezione okna dymków (`toast window: …`) i każdy
+wypowiedziany tekst (`say: …`).
 
 ## Klawisze (gdy nakładka jest otwarta)
 
@@ -121,6 +133,7 @@ Opcjonalny plik `~/.config/steam-overlay-access/config.json`:
       "module": null,      // moduł speech-dispatchera (tylko Linux)
       "language": null,    // np. "en", jeśli Steam jest po angielsku, a syntezator po polsku
       "screenreader": true, // Windows: mów przez NVDA, gdy jest uruchomiony
+      "sapi": true,        // Windows: mów przez SAPI, gdy NVDA nie jest uruchomiony
       "port": 8080
     }
 

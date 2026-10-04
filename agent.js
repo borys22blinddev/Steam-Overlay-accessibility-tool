@@ -317,7 +317,8 @@
     if (!window.g_PopupManager) return out;
     for (const [key, p] of window.g_PopupManager.m_mapPopups) {
       const win = p.m_popup;
-      if (!win || win.closed || !win.document || !win.document.body) continue;
+      // One popup in a bad state must not stop every other window from being found.
+      try { if (!win || win.closed || !win.document || !win.document.body) continue; } catch (e) { continue; }
       const tb = p.m_rgParams && p.m_rgParams.target_browser;
       const toast = /notificationtoasts/i.test(key);
       const inGame = (tb && tb.m_unPID) || /_uid[1-9]\d*$/.test(key);
@@ -350,7 +351,7 @@
 
   function hook(info) {
     const { win } = info;
-    const st = { key: info.key, toast: info.toast, appid: info.appid, popup: info.popup, gamepad: !!info.gamepad, cursor: null, items: null, off: [], editEcho: '', spoken: '', recheck: 0, lead: [], leadAt: 0 };
+    const st = { key: info.key, toast: info.toast, appid: info.appid, popup: info.popup, gamepad: !!info.gamepad, cursor: null, items: null, off: [], editEcho: '', spoken: '', recheck: 0, lead: [], leadAt: 0, lastToast: '', toastSince: 0 };
     const on = (target, ev, fn, opts) => { target.addEventListener(ev, fn, opts); st.off.push(() => target.removeEventListener(ev, fn, opts)); };
     const mo = new win.MutationObserver((records) => {
       st.items = null;
@@ -361,7 +362,11 @@
     if (st.gamepad) Object.assign(watch, { attributes: true, attributeFilter: ['aria-checked', 'aria-selected', 'aria-expanded', 'aria-valuenow', 'aria-valuetext'] });
     mo.observe(win.document.documentElement, watch);
     st.off.push(() => { mo.disconnect(); clearTimeout(st.recheck); });
-    if (st.toast && CFG.toasts) hideToastFromAT(win);
+    if (st.toast) {
+      st.off.push(() => { clearTimeout(S.toastTimers.get(win)); S.toastTimers.delete(win); });
+      if (CFG.toasts) hideToastFromAT(win);
+      send({ t: 'log', text: 'toast window: ' + st.key });
+    }
     if (!st.toast) {
       on(win, 'keydown', onKeyDown, true);
       on(win, 'focus', (e) => { if (e.target === win || e.target === win.document) onWindowFocus(win); }, true);
@@ -533,6 +538,7 @@
     const live = new Set(infos.map((i) => i.win));
     for (const win of [...wins.keys()]) if (!live.has(win)) unhook(win);
     for (const info of infos) if (!wins.has(info.win)) hook(info);
+    for (const [win, st] of wins) if (st.toast) pollToast(win, st);
 
     const shown = new Set();
     for (const [win, st] of wins) if (!st.toast && isShown(win)) shown.add(win);
@@ -623,20 +629,41 @@
     };
   }
 
+  const toastText = (win) => clean(win.document.body.innerText);
+
+  // Waits until the toast has stopped changing, so that a toast rendered in
+  // several steps is spoken once - but not forever when it keeps changing.
   function scheduleToast(win, st) {
     if (!CFG.toasts) return;
-    clearTimeout(S.toastTimers.get(win));
-    S.toastTimers.set(win, setTimeout(() => {
-      let text = '';
-      try { text = clean(win.document.body.innerText); } catch (e) { return; }
-      if (!text || text === st.lastToast) { if (!text) st.lastToast = ''; return; }
-      st.lastToast = text;
-      // The same toast can be rendered once per running game and on the desktop.
-      if (S.lastToast === text && Date.now() - S.lastToastAt < 4000) return;
-      S.lastToast = text;
-      S.lastToastAt = Date.now();
-      say(L.notification + ': ' + text, false);
-    }, 400));
+    if (S.toastTimers.has(win)) {
+      if (Date.now() - st.toastSince > 1500) return;
+      clearTimeout(S.toastTimers.get(win));
+    } else st.toastSince = Date.now();
+    S.toastTimers.set(win, setTimeout(() => { S.toastTimers.delete(win); readToast(win, st); }, 400));
+  }
+
+  function readToast(win, st) {
+    let text = '';
+    try { text = toastText(win); } catch (e) { return; }
+    if (!text || text === st.lastToast) { if (!text) st.lastToast = ''; return; }
+    st.lastToast = text;
+    // The same toast can be rendered once per running game and on the desktop.
+    if (S.lastToast === text && Date.now() - S.lastToastAt < 4000) { send({ t: 'log', text: 'toast repeated in ' + st.key }); return; }
+    S.lastToast = text;
+    S.lastToastAt = Date.now();
+    send({ t: 'log', text: 'toast from ' + st.key });
+    say(L.notification + ': ' + text, false);
+  }
+
+  // Called on every tick for what the mutation observer cannot see: a toast
+  // that was already rendered when its window got hooked, one that only
+  // became visible through a style change, or a window whose document Steam
+  // replaced after we hooked it.
+  function pollToast(win, st) {
+    if (!CFG.toasts || S.toastTimers.has(win)) return;
+    let text = '';
+    try { text = toastText(win); } catch (e) { return; }
+    if (text !== st.lastToast) scheduleToast(win, st);
   }
 
   // Gamepad UI: speaks the focused item again when it changed in place.
@@ -942,7 +969,7 @@
   S.timer = setInterval(() => { try { tick(); } catch (err) { send({ t: 'log', text: 'tick: ' + (err && err.stack || err) }); } }, 250);
 
   window.__soa = {
-    version: 4,
+    version: 5,
     cycle,
     cycleFromPage,
     pageFocused,
@@ -950,6 +977,8 @@
     // Daemon relay: Backspace was pressed inside an overlay web page.
     closeFraming(title) { const w = framingWindow(title); if (w) closeWindow(w); },
     setRemote(v) { S.remote = !!v; },
+    // Daemon relay: a toast window that was opened before this agent was injected.
+    addToast(win) { if (!CFG.toasts || !win) return false; S.toastViews.add(win); return true; },
     // Debug/test helper: put the cursor on the first item whose description contains `text`.
     find(text, key) {
       for (const [w, st] of wins) {
@@ -964,7 +993,7 @@
     },
     // Daemon relay: F6 in the shared context just moved focus into a web page.
     announceIfFocused() { if (!SHARED && document.visibilityState === 'visible' && document.hasFocus() && Date.now() - S.lastFocusSpoken > 1000) { S.lastFocusSpoken = Date.now(); S.current = window; S.remote = false; announceWindow(window); } },
-    state: () => ({ shared: SHARED, windows: [...wins.values()].map((s) => s.key), shown: [...S.shown].map((w) => wins.get(w).key), current: S.current && wins.get(S.current) ? wins.get(S.current).key : null }),
+    state: () => ({ shared: SHARED, windows: [...wins.values()].map((s) => s.key), toasts: [...wins.values()].filter((s) => s.toast).map((s) => s.key), shown: [...S.shown].map((w) => wins.get(w).key), current: S.current && wins.get(S.current) ? wins.get(S.current).key : null }),
     dump: (key) => { for (const [w, s] of wins) if (!key || s.key.startsWith(key)) return collect(w).map((it) => describe(it, w)); return null; },
     destroy() {
       clearInterval(S.timer);

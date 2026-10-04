@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 
 import websockets
@@ -29,6 +30,10 @@ else:
     CONFIG_HOME = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
 CONFIG_PATH = os.path.join(CONFIG_HOME, 'steam-overlay-access', 'config.json')
 BINDING = '__soaBridge'
+# Run inside a toast window: hands the window to the agent of the context that opened it.
+REGISTER_TOAST = ('(() => { try { const a = window.opener && window.opener.__soa;'
+                  ' return !!(a && a.addToast && a.addToast(window)); } catch (e) { return false; } })()')
+TOAST_TRIES = 5
 DEFAULTS = {
     'port': 8080,
     'echo': True,       # speak typed characters in edit fields
@@ -39,11 +44,17 @@ DEFAULTS = {
     'module': None,     # speech-dispatcher output module (Linux only)
     'language': None,   # voice language, e.g. 'en' when Steam's UI is English
     'screenreader': True,  # Windows: speak through NVDA when it is running
+    'sapi': True,       # Windows: speak through SAPI 5 while NVDA is not running
 }
+
+
+LOG_FILE = None  # set by --log: the Windows build has no console to print to
 
 
 def log(*args):
     print(*args, file=sys.stderr, flush=True)
+    if LOG_FILE is not None:
+        print(time.strftime('%H:%M:%S'), *args, file=LOG_FILE, flush=True)
 
 
 class SpeechdSpeaker:
@@ -104,9 +115,10 @@ class SpeechdSpeaker:
 
 
 class WindowsSpeaker:
-    """Speaks through NVDA when it is running and its controller client DLL lies
-    next to this file; otherwise through SAPI 5, driven by a PowerShell helper
-    that stays running and takes one JSON command per line."""
+    """Speaks through NVDA whenever it is running (its controller client DLL is
+    part of the built program; from source it lies next to this file). Only
+    while NVDA is not running does speech go to SAPI 5, driven by a PowerShell
+    helper that stays running and takes one JSON command per line."""
 
     NVDA_DLLS = ('nvdaControllerClient.dll', 'nvdaControllerClient64.dll', 'nvdaControllerClient32.dll')
 
@@ -114,6 +126,9 @@ class WindowsSpeaker:
         self.cfg = cfg
         self.proc = None
         self.nvda = self._load_nvda() if cfg['screenreader'] else None
+        self.nvda_code = 0
+        if cfg['screenreader']:
+            log('NVDA controller client: %s' % ('loaded' if self.nvda else 'not found, speech goes to SAPI'))
 
     def _load_nvda(self):
         import ctypes
@@ -163,8 +178,12 @@ class WindowsSpeaker:
         if self._nvda_running():
             if interrupt:
                 self.nvda.nvdaController_cancelSpeech()
-            self.nvda.nvdaController_speakText(text)
-        else:
+            code = self.nvda.nvdaController_speakText(text)
+            if code != self.nvda_code:  # log a change, not every utterance
+                self.nvda_code = code
+                log('NVDA speech: %s' % ('ok' if code == 0 else
+                    'refused, error %d (is the focused program in NVDA sleep mode?)' % code))
+        elif self.cfg['sapi']:
             self._sapi({'t': 'say', 'text': text, 'interrupt': interrupt})
 
     def stop(self):
@@ -217,6 +236,7 @@ class Session:
                 self.ws = ws
                 if self.shared:
                     d.shared = self
+                    d.toast_tries.clear()  # a fresh agent knows no toast windows yet
                 await self.send('Runtime.enable')
                 await self.send('Runtime.addBinding', name=BINDING)
                 await self.send('Page.enable')
@@ -248,6 +268,7 @@ class Daemon:
         self.sessions = {}
         self.shared = None
         self.web_remote = False  # overlay web pages forward their keys to the shared context
+        self.toast_tries = {}    # target id -> attempts to hand that toast window to the agent
         self.steam_seen = None
         with open(os.path.join(HERE, 'agent.js'), encoding='utf-8') as f:
             agent_cfg = {k: cfg[k] for k in ('echo', 'toasts', 'chat')}
@@ -265,6 +286,33 @@ class Daemon:
         # Web pages: the agent itself bails out unless it runs in the overlay browser.
         url = t.get('url', '')
         return url.startswith(('http://', 'https://')) and 'steamloopback.host' not in url
+
+    def is_toast(self, t):
+        # The agent blanks the title of every toast window it knows, so a
+        # window still carrying its name is one the agent has not found.
+        return (t.get('type') == 'page' and bool(t.get('webSocketDebuggerUrl'))
+                and 'notificationtoasts' in t.get('title', '').lower())
+
+    async def register_toast(self, target):
+        """Toast windows opened before the agent was injected are found through
+        Steam's popup manager, but Big Picture keeps its toasts out of it: such
+        a window is handed to the agent from the inside, through its opener."""
+        ok = False
+        try:
+            async with websockets.connect(target['webSocketDebuggerUrl'], max_size=None, ping_interval=None,
+                                          **connect_options()) as ws:
+                await ws.send(json.dumps({'id': 1, 'method': 'Runtime.evaluate',
+                                          'params': {'expression': REGISTER_TOAST, 'returnByValue': True}}))
+                while True:
+                    msg = json.loads(await asyncio.wait_for(ws.recv(), 5))
+                    if msg.get('id') == 1:
+                        ok = msg.get('result', {}).get('result', {}).get('value') is True
+                        break
+        except (OSError, asyncio.TimeoutError, websockets.WebSocketException):
+            pass
+        self.debug('toast window %s: %s' % (target.get('title'), 'handed to the agent' if ok else 'not reachable'))
+        if ok:
+            self.toast_tries[target['id']] = TOAST_TRIES
 
     def fetch_targets(self):
         # No proxy: on Windows urllib would pick up the system-wide one.
@@ -322,6 +370,9 @@ class Daemon:
                     s = Session(self, t)
                     self.sessions[t['id']] = s
                     asyncio.create_task(s.run())
+                elif self.shared is not None and self.is_toast(t) and self.toast_tries.get(t['id'], 0) < TOAST_TRIES:
+                    self.toast_tries[t['id']] = self.toast_tries.get(t['id'], 0) + 1
+                    asyncio.create_task(self.register_toast(t))
             await asyncio.sleep(2)
 
 
@@ -344,7 +395,11 @@ def main():
     ap.add_argument('--port', type=int, help='CEF remote debugging port (default 8080)')
     ap.add_argument('--no-speech', action='store_true', help='do not speak (for debugging with -v)')
     ap.add_argument('-v', '--verbose', action='store_true', help='log everything that is spoken')
+    ap.add_argument('--log', metavar='FILE', help='also append the log to FILE')
     args = ap.parse_args()
+    if args.log:
+        global LOG_FILE
+        LOG_FILE = open(args.log, 'a', encoding='utf-8')
     try:
         daemon = Daemon(load_config(args), args.verbose)
         if args.no_speech:
