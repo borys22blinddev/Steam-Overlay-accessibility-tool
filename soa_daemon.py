@@ -114,6 +114,7 @@ class WindowsSpeaker:
         self.cfg = cfg
         self.proc = None
         self.nvda = self._load_nvda() if cfg['screenreader'] else None
+        self.backend = None
 
     def _load_nvda(self):
         import ctypes
@@ -125,9 +126,11 @@ class WindowsSpeaker:
             try:
                 dll = ctypes.WinDLL(path)
                 dll.nvdaController_speakText.argtypes = [ctypes.c_wchar_p]
+                log('NVDA controller client:', path)
                 return dll
             except (OSError, AttributeError):  # DLL built for the other bitness
                 continue
+        log('No usable nvdaControllerClient.dll found; speaking through SAPI only.')
         return None
 
     def _nvda_running(self):
@@ -160,7 +163,11 @@ class WindowsSpeaker:
                     log('SAPI helper error:', e)
 
     def say(self, text, interrupt=True):
-        if self._nvda_running():
+        nvda = self._nvda_running()
+        if self.backend != nvda:
+            self.backend = nvda
+            log('Speech output:', 'NVDA' if nvda else 'SAPI 5')
+        if nvda:
             if interrupt:
                 self.nvda.nvdaController_cancelSpeech()
             self.nvda.nvdaController_speakText(text)
@@ -222,8 +229,6 @@ class Session:
                 await self.send('Page.enable')
                 await self.send('Page.addScriptToEvaluateOnNewDocument', source=d.agent)
                 await self.send('Runtime.evaluate', expression=d.agent)
-                if not self.shared and d.web_remote:
-                    await self.evaluate('window.__soa && window.__soa.setRemote(true)')
                 d.debug('attached:', self.title or self.id)
                 async for raw in ws:
                     msg = json.loads(raw)
@@ -248,6 +253,7 @@ class Daemon:
         self.sessions = {}
         self.shared = None
         self.web_remote = False  # overlay web pages forward their keys to the shared context
+        self.overlay_open = False  # an in-game overlay is on screen (wakes Big Picture web pages)
         self.steam_seen = None
         with open(os.path.join(HERE, 'agent.js'), encoding='utf-8') as f:
             agent_cfg = {k: cfg[k] for k in ('echo', 'toasts', 'chat')}
@@ -286,6 +292,15 @@ class Daemon:
         elif kind == 'cycle' and self.shared is not None:
             await self.shared.evaluate('window.__soa && window.__soa.cycleFromPage(%d, %s)'
                                        % (-1 if msg.get('dir', 1) < 0 else 1, json.dumps(str(msg.get('title', '')))))
+        elif kind == 'hello' and not session.shared:
+            # A web page (re)loaded its agent: tell it the current overlay state.
+            await session.evaluate('window.__soa && (window.__soa.setRemote(%s), window.__soa.setOverlay(%s))'
+                                   % (json.dumps(self.web_remote), json.dumps(self.overlay_open)))
+        elif kind == 'overlay' and session.shared:
+            self.overlay_open = bool(msg.get('open'))
+            for s in list(self.sessions.values()):
+                if not s.shared:
+                    await s.evaluate('window.__soa && window.__soa.setOverlay(%s)' % json.dumps(self.overlay_open))
         elif kind == 'webmode':
             self.web_remote = not msg.get('web')
             for s in list(self.sessions.values()):

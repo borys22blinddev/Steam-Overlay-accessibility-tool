@@ -36,6 +36,12 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
+# NVDA's controller client: without it the daemon speaks through SAPI even when NVDA runs.
+if (-not (Test-Path (Join-Path $Dir 'nvdaControllerClient.dll'))) {
+    & $Python (Join-Path $Dir 'fetch_nvda_client.py') $Dir
+    if ($LASTEXITCODE -ne 0) { Write-Host 'Could not download the NVDA controller client; speech will use SAPI.' }
+}
+
 New-Item -ItemType File -Force -Path (Join-Path $Steam '.cef-enable-remote-debugging') | Out-Null
 if (-not (Test-Path (Join-Path $Steam '.cef-enable-remote-debugging'))) {
     Write-Host "Could not create .cef-enable-remote-debugging in $Steam (run as administrator?)."
